@@ -63,6 +63,16 @@ pub struct Deploy {
     verbosity: VerbosityArgs,
 }
 
+fn left_pad_with_zeros(input_string: &str, n: usize) -> String {
+    if input_string.len() >= n {
+        input_string.to_string()
+    } else {
+        let zeros_to_pad = n - input_string.len();
+        let padded_string = format!("{}{}", "0".repeat(zeros_to_pad), input_string);
+        padded_string
+    }
+}
+
 impl Deploy {
     pub async fn run(self) -> Result<()> {
         self.verbosity.setup_logging();
@@ -82,12 +92,7 @@ impl Deploy {
             ctor_args.append(&mut felt_decoder.decode(element).await?);
         }
 
-        let salt = if let Some(s) = self.salt {
-            FieldElement::from_hex_be(&s)?
-        } else {
-            SigningKey::from_random().secret_scalar()
-        };
-
+        let mut salt = 0;
         // TODO: refactor account & signer loading
 
         let account_config: AccountConfig =
@@ -98,20 +103,33 @@ impl Deploy {
             DeploymentStatus::Deployed(inner) => inner.address,
         };
 
-        let deployed_address = get_udc_deployed_address(
-            salt,
-            class_hash,
-            &if self.not_unique {
-                UdcUniqueness::NotUnique
-            } else {
-                UdcUniqueness::Unique(UdcUniqueSettings {
-                    deployer_address: account_address,
-                    udc_contract_address: DEFAULT_UDC_ADDRESS,
-                })
-            },
-            &ctor_args,
-        );
-
+        
+        let mut deployed_address: FieldElement;
+        loop {
+                deployed_address = get_udc_deployed_address(
+                    FieldElement::from_dec_str(salt.to_string().as_str()).unwrap(),
+                    class_hash,
+                    &if self.not_unique {
+                        UdcUniqueness::NotUnique
+                    } else {
+                        UdcUniqueness::Unique(UdcUniqueSettings {
+                            deployer_address: account_address,
+                            udc_contract_address: DEFAULT_UDC_ADDRESS,
+                        })
+                    },
+                    &ctor_args,
+                );
+                
+                let mut formated = format!("{:x}", deployed_address);
+                formated = left_pad_with_zeros(&formated, 64);
+                if formated.as_str().starts_with("04515") {
+                    println!("Right salt is: {:?}", salt);
+                    println!("Associated address: {:?}", formated);
+                    break;
+                }
+                salt += 1;
+        }
+        let salt = FieldElement::from_dec_str(salt.to_string().as_str()).unwrap();
         let chain_id = provider.chain_id().await?;
 
         let signer = Arc::new(self.signer.into_signer()?);
